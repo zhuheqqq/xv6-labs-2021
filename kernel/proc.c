@@ -289,6 +289,8 @@ fork(void)
   }
   np->sz = p->sz;
 
+  np->parent=p;
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -314,6 +316,8 @@ fork(void)
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
+
+  np->mask=p->mask;
 
   return pid;
 }

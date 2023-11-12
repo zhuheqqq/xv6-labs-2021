@@ -104,6 +104,7 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,17 +128,27 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace]   sys_trace,
+};
+
+char *syscall_name[]={
+  "","fork", "exit", "wait", "pipe", "read",
+  "kill", "exec", "fstat", "chdir", "dup", "getpid", "sbrk", "sleep",
+  "uptime", "open", "write", "mknod", "unlink", "link", "mkdir","close","trace","sysinfo"
 };
 
 void
-syscall(void)
+syscall(void)//用于处理系统调用
 {
   int num;
-  struct proc *p = myproc();
+  struct proc *p = myproc();//myproc()：宏，当前的进程
 
-  num = p->trapframe->a7;
+ // trap 代码将用户寄存器保存到当前进程的 trapframe 中
+  num = p->trapframe->a7;//从当前进程的陷阱帧（trapframe）中获取系统调用编号
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    p->trapframe->a0 = syscalls[num]();
+    p->trapframe->a0 = syscalls[num]();//执行系统调用
+    if((p->mask>>num)&1)//用于检查当前进程的 mask 是否指示要跟踪这个特定的系统调用
+      printf("%d: syscall %s -> %d\n",p->pid,syscall_name[num],p->trapframe->a0);//进程id、系统调用的名称、返回值
   } else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);
