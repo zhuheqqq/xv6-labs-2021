@@ -6,6 +6,10 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
+
+extern int getFreeBytes(void);
+extern int getProcNum(void);
 
 uint64
 sys_exit(void)
@@ -107,4 +111,24 @@ sys_trace(int)
   }
   myproc()->mask=mask;
   return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  struct proc *p=myproc();
+  struct sysinfo res;//一个sysinfo类型的结构体变量
+  uint64 addr;
+
+  if(argaddr(0, &addr) < 0)//addr是指向sysinfo结构体的指针
+    return -1;
+
+  res.freemem=getFreeBytes();
+  res.nproc=getProcNum();
+
+  if(copyout(p->pagetable,addr,(char *)&res,sizeof(res))<0)
+    return -1;
+
+  return 0;
+
 }
