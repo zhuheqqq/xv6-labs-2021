@@ -78,7 +78,22 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
+  {
+    if(p->alarm_interval)// 如果启用闹钟
+    {
+      if(--p->alarm_ticks_left<=0)//刻度如果小于0
+      {
+        if(!p->alarm_handler_lock)//如果处理函数没有运行
+        {
+          *p->alarm_backup=*p->trapframe;//保存当前的trapframe（陷阱帧）
+          p->trapframe->epc=(uint64)p->alarm_handler;//修改返回地址
+          p->alarm_handler_lock=1;//设置可重入锁
+        }
+      }
+    }
     yield();
+  }
+    
 
   usertrapret();
 }
@@ -216,5 +231,22 @@ devintr()
   } else {
     return 0;
   }
+}
+
+int sigalarm(int ticks, void (*handler)()) { 
+  struct proc *p = myproc();
+  p->alarm_interval = ticks;
+  p->alarm_handler = handler;
+  p->alarm_ticks_left = ticks;
+  return 0;
+}
+
+int sigreturn() { 
+  struct proc *p = myproc();
+  // restore trapframe
+  *p->trapframe = *p->alarm_backup;
+  // release reentrant lock
+  p->alarm_handler_lock = 0;
+  return 0;
 }
 

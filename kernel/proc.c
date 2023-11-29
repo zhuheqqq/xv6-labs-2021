@@ -78,10 +78,10 @@ mycpu(void) {
 // Return the current struct proc *, or zero if none.
 struct proc*
 myproc(void) {
-  push_off();
-  struct cpu *c = mycpu();
-  struct proc *p = c->proc;
-  pop_off();
+  push_off();//禁用中断
+  struct cpu *c = mycpu();//返回当前cpu的数据结构指针
+  struct proc *p = c->proc;//提取proc指针 指向当前正在运行的进程相关信息
+  pop_off();//允许启用中断
   return p;
 }
 
@@ -126,6 +126,12 @@ found:
     release(&p->lock);
     return 0;
   }
+    // Allocate a trapframe page for alarm backup trapframe
+  if((p->alarm_backup = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -140,6 +146,10 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  p->alarm_interval = 0;
+  p->alarm_handler = 0;
+  p->alarm_ticks_left = 0;
+  p->alarm_handler_lock = 0;
 
   return p;
 }
@@ -153,6 +163,8 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if (p->alarm_backup) 
+    kfree((void *)p->alarm_backup);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -164,6 +176,10 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+   p->alarm_handler = 0;
+  p->alarm_interval = 0;
+  p->alarm_ticks_left = 0;
+  p->alarm_handler_lock = 0;
 }
 
 // Create a user page table for a given process,
