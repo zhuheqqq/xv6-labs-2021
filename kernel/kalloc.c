@@ -23,9 +23,15 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct{
+  struct spinlock lock;
+  int refcount_arr[(PHYSTOP-KERNBASE)/PGSIZE];
+}refcount;
+
 void
 kinit()
 {
+  initlock(&refcount.lock,"refcount");
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
