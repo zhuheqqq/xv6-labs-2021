@@ -29,17 +29,18 @@ e1000_init(uint32 *xregs)
 {
   int i;
 
-  initlock(&e1000_lock, "e1000");
+  initlock(&e1000_lock, "e1000");//初始化锁并设置锁的名称为e1000
 
-  regs = xregs;
+  regs = xregs;//将全局变量 regs 设置为传入的 xregs 参数的值
 
   // Reset the device
-  regs[E1000_IMS] = 0; // disable interrupts
-  regs[E1000_CTL] |= E1000_CTL_RST;
-  regs[E1000_IMS] = 0; // redisable interrupts
-  __sync_synchronize();
+  regs[E1000_IMS] = 0; // disable interrupts禁用中断
+  regs[E1000_CTL] |= E1000_CTL_RST;//设备复位
+  regs[E1000_IMS] = 0; // redisable interrupts再次禁用中断
+  __sync_synchronize();//确保之前的写入和之后的写入不会被重排序
 
   // [E1000 14.5] Transmit initialization
+  //初始化传输环 (tx_ring) 的每个条目，将其状态设置为指示可用状态
   memset(tx_ring, 0, sizeof(tx_ring));
   for (i = 0; i < TX_RING_SIZE; i++) {
     tx_ring[i].status = E1000_TXD_STAT_DD;
