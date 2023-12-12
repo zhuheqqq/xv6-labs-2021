@@ -9,6 +9,10 @@
 #include "riscv.h"
 #include "defs.h"
 
+
+#define LOCK_NAME_LEN 16
+char kmem_lock_name[NCPU][LOCK_NAME_LEN];
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -21,12 +25,16 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];//面向NCPU个cpu核心的空闲列表
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i=0;i<NCPU;i++){
+    char *name=kmem_lock_name[i];
+    snprintf(name, LOCK_NAME_LEN - 1, "kmem_cpu_%d", i);
+    initlock(&kmem[i].lock, "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +43,31 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
+  push_off();//禁用中断
+  int cpu=cpuid();
+  pop_off();
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+    kfree_cpu(p,cpu);
+}
+
+void kfree_cpu(void *pa, int cpuid)
+{
+  struct run *r;
+
+  if(((uint64)pa) % PGSIZE!= 0||(char*)pa < end||(uint64)pa > PHYSTOP)
+  {
+    panic("kfree");
+  }
+
+  memset(pa,1,PGSIZE);
+
+  r=(struct run*)pa;
+
+  acquire(&kmem[cpuid].lock);
+  r->next=kmem[cpuid].freelist;
+  kmem[cpuid].freelist=r;
+  release(&kmem[cpuid].lock);
+
 }
 
 // Free the page of physical memory pointed at by v,
@@ -46,20 +77,25 @@ freerange(void *pa_start, void *pa_end)
 void
 kfree(void *pa)
 {
-  struct run *r;
+  // struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
+  // if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  //   panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  // // Fill with junk to catch dangling refs.
+  // memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+  // r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  // acquire(&kmem.lock);
+  // r->next = kmem.freelist;
+  // kmem.freelist = r;
+  // release(&kmem.lock);
+
+  push_off();//禁用中断
+  int cpu=cpuid();
+  pop_off();
+  kfree_cpu(pa,cpu);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,12 +106,37 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int cpu=cpuid();//获取当前cpu编号
+  pop_off();
 
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;//从当前cpu自由列表中获取一个可用的内存块
+  if(r)//如果当前空闲列表不为空
+  {
+    kmem[cpu].freelist = r->next;//更新自由列表
+    release(&kmem[cpu].lock);
+  }else{//如果为空
+    release(&kmem[cpu].lock);//释放内存池锁
+    for(int i=0;i<NCPU;i++){//在其他cpu自由列表中查找可用的内存块
+      if(i==cpu)//跳过当前cpu
+      {
+        continue;
+      }
+      acquire(&kmem[i].lock);
+      r=kmem[i].freelist;
+
+      if(r)//如果找到更新列表并释放内存池锁
+      {
+        kmem[i].freelist = r->next;
+        release(&kmem[i].lock);
+        break;
+      }
+      release(&kmem[i].lock);
+    }
+  }
+    
+  // 如果成功获取到内存块，使用 5 填充内存块内容
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;

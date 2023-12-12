@@ -27,28 +27,33 @@ int ntas(int print)
   int n;
   char *c;
 
-  if (statistics(buf, SZ) <= 0) {
+  if (statistics(buf, SZ) <= 0) {//没有收集到统计信息
     fprintf(2, "ntas: no stats\n");
   }
   c = strchr(buf, '=');
+  // 从等号之后的两个字符开始解析整数，并赋值给 n
   n = atoi(c+2);
   if(print)
     printf("%s", buf);
   return n;
 }
 
+
+//多进程的环境中使用 sbrk 函数进行内存分配和释放的正确性
 void test1(void)
 {
   void *a, *a1;
   int n, m;
   printf("start test1\n");  
   m = ntas(0);
+  // 循环创建 NCHILD 个子进程
   for(int i = 0; i < NCHILD; i++){
     int pid = fork();
     if(pid < 0){
       printf("fork failed");
       exit(-1);
     }
+    //子进程
     if(pid == 0){
       for(i = 0; i < N; i++) {
         a = sbrk(4096);
@@ -63,6 +68,7 @@ void test1(void)
     }
   }
 
+  // 等待所有子进程结束
   for(int i = 0; i < NCHILD; i++){
     wait(0);
   }
