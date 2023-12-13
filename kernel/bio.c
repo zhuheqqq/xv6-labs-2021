@@ -27,6 +27,12 @@
 #define LOCK_NAME_LEN 20
 char bucket_lock_name[NBUCKET][LOCK_NAME_LEN];
 
+
+struct bucket{//哈希桶
+  struct spinlock lock;
+  struct buf head;
+};
+
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
@@ -38,10 +44,6 @@ struct {
   //struct buf head;
 } bcache;
 
-struct bucket{//哈希桶
-  struct spinlock lock;
-  struct buf head;
-};
 
 int hash(uint dev,uint blockno)
 {
@@ -91,6 +93,9 @@ binit(void)
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
+// Look through buffer cache for block on device dev.
+// If not found, allocate a buffer.
+// In either case, return locked buffer.
 static struct buf*
 bget(uint dev, uint blockno)
 {
@@ -121,8 +126,8 @@ bget(uint dev, uint blockno)
   // Not cached.如果块不在缓冲区中
   // Recycle the least recently used (LRU) unused buffer.
   //回收最近最少使用的未使用的缓冲块
-  for(b = bucket->head.next; b; b = b->prev){
-    if(b->dev==dev&&b->blockno) {
+  for(b = bucket->head.next; b; b = b->next){
+    if(b->dev==dev&&b->blockno==blockno) {
       // b->dev = dev;
       // b->blockno = blockno;
       // b->valid = 0;//有效标志置0
@@ -136,7 +141,57 @@ bget(uint dev, uint blockno)
   }
 
   release(&bucket->lock);
-  panic("bget: no buffers");
+
+  prev_replace_buf=(void *)0;//要驱逐的缓存的前一个节点
+  prev_bucket=(void*)0;//前一个已锁定的存储桶，初始值为null
+
+  for(cur_bucket=bcache.hashtable;cur_bucket<bcache.hashtable+NBUCKET;cur_bucket++){
+    acquire(&cur_bucket->lock);
+    int found=0;
+    for(b=&cur_bucket->head;b->next;b=b->next){
+      if(b->next->refcnt==0&&(!prev_replace_buf||b->next->timestamp<prev_replace_buf->next->timestamp)){
+        prev_replace_buf=b;
+        found=1;
+      }
+    }
+    if(!found)
+    {
+      release(&cur_bucket->lock);
+      //break;
+    }else{
+      if(prev_bucket)
+      {
+        release(&prev_bucket->lock);
+      }
+      prev_bucket=cur_bucket;
+    }
+  }
+  if(!prev_replace_buf)
+  {
+    panic("bget: no buffers");
+  }
+  b=prev_replace_buf->next;
+
+  if(prev_bucket!=bucket)
+  {
+    prev_replace_buf->next=b->next;
+    release(&prev_bucket->lock);
+    acquire(&bucket->lock);
+    b->next=bucket->head.next;
+    bucket->head.next=b;
+  }
+
+  b->dev=dev;
+  b->blockno=blockno;
+  b->refcnt=1;
+  b->valid=0;
+  release(&bucket->lock);
+  release(&bcache.lock);
+  acquiresleep(&b->lock);
+
+  return b;
+
+  
 }
 
 // Return a locked buf with the contents of the indicated block.
@@ -186,7 +241,7 @@ brelse(struct buf *b)
   // }
 
   int index=hash(b->dev,b->blockno);//获得当前缓冲区编号
-  accquire(&bcache.hashtable[index].lock);
+  acquire(&bcache.hashtable[index].lock);
   b->refcnt--;
   if(b->refcnt==0)
   {
