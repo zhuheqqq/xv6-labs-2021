@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define MAX_SYMLINK_DEPTH 8
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -288,8 +290,10 @@ sys_open(void)
 {
   char path[MAXPATH];
   int fd, omode;
+  int depth=0;
   struct file *f;
   struct inode *ip;
+  //struct inode *target_ip;//存储符号链接目标的inode
   int n;
 
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
@@ -313,6 +317,35 @@ sys_open(void)
       iunlockput(ip);
       end_op();
       return -1;
+    }
+  }
+
+  if(ip->type==T_SYMLINK&&!(omode&O_NOFOLLOW))
+  {
+    while(ip->type==T_SYMLINK)
+    {
+      if(++depth==MAX_SYMLINK_DEPTH){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      //读出新目标路径
+      if(readi(ip,0,(uint64)path,0,MAXPATH)<0)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+
+      iunlockput(ip);
+
+      if((ip=namei(path))==0)
+      {
+        end_op();
+        return -1;
+      }
+
+      ilock(ip);
     }
   }
 
@@ -482,5 +515,33 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 sys_symlink(void)
+{
+  struct inode *ip;
+  char target[MAXPATH],path[MAXPATH];
+  int n;
+
+  if((n=argstr(0,target,MAXPATH))<0||argstr(1,path,MAXPATH)<0){
+    return -1;
+  }
+
+  begin_op();
+  //create inode of the symlink
+  if((ip=create(path,T_SYMLINK,0,0))==0){
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip,0,(uint64)target,0,n)!=n){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
