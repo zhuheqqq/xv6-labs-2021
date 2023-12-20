@@ -38,6 +38,7 @@ usertrap(void)
 {
   int which_dev = 0;
 
+  //检查陷阱是否不是来自用户模式
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
@@ -45,42 +46,47 @@ usertrap(void)
   // since we're now in the kernel.
   w_stvec((uint64)kernelvec);
 
-  struct proc *p = myproc();
+  struct proc *p = myproc();//获取当前进程
   
   // save user program counter.
-  p->trapframe->epc = r_sepc();
-  
+  p->trapframe->epc = r_sepc();//保存用户程序计数器
+  //检查陷阱原因是否是系统调用
   if(r_scause() == 8){
     // system call
 
-    if(p->killed)
+    if(p->killed)//检查进程是否已经被终止
       exit(-1);
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
-    p->trapframe->epc += 4;
+    p->trapframe->epc += 4;//调整程序计数器指向ecall之后下一条指令
 
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
-    intr_on();
+    intr_on();//启用中断
 
-    syscall();
+    syscall();//调用系统调用程序
   } else if((which_dev = devintr()) != 0){
     // ok
+  }else if(r_scause()==13||r_scause()==15){
+    if(mmap_handler(r_stval(),r_scause())<0){
+      p->killed=1;
+    }
   } else {
+    //未预期的陷阱 将进程标记为已终止
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
-  if(p->killed)
+  if(p->killed)//再次检查进程是否被终止
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2)//如果这是定时器中断
     yield();
 
-  usertrapret();
+  usertrapret();//返回用户陷阱
 }
 
 //

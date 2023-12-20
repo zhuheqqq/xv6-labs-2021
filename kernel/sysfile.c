@@ -3,7 +3,7 @@
 // Mostly argument checking, since we don't trust
 // user code, and calls into file.c and fs.c.
 //
-
+#include "memlayout.h"
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
@@ -482,5 +482,133 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length,prot,flags,fd,offset;
+  struct proc *p=myproc();
+
+  //从用户空间获取参数
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0||argint(2,&prot)<0||argint(3,&flags)<0||argint(4,&fd)<0||argint(5,&offset)<0)
+  {
+    return -1;
+  }
+
+  if(addr!=0)
+  {
+    panic("sys_mmap:addr not set 0");
+  }
+  if(offset!=0)
+  {
+    panic("sys_mmap:offset not set 0");
+  }
+
+  //检查文件的保护位是否与标志和文件权限匹配
+  //不能将更改写回到不可写文件
+  struct file *f=p->ofile[fd];
+  if((!(f->writable))&&(flags&MAP_SHARED)&&(prot&PROT_WRITE))
+  {
+    printf("sys_mmap:cannot write back any changes to a unwritable file.\n");
+    return -1;
+  }
+
+  //不能从不可读文件中读取
+  if((!(f->readable)) && (prot & PROT_READ)){
+    printf("sys_mmap: cannot read from a unreadable file.\n");
+    return -1;
+  }
+
+  //查找空闲的vma,并计算将映射的用户内存防止在那，里
+  //映射的内存从trampoline页向上增长
+  struct vma *vma=0;
+  uint64 min_mmap_addr=TRAPFRAME;
+  for(int i=0;i<NVMA;i++)
+  {
+    struct vma *v=&p->vma[i];
+    if(!v->used)
+    {
+      if(!vma){
+        vma=v;v->used=1;
+      }
+    }else if(v->addr<min_mmap_addr){
+      min_mmap_addr=PGROUNDDOWN(v->addr);
+    }
+  }
+  if(!vma){//无法找到空闲的vma
+    printf("sys_mmap:unable to find free VMA\n");
+    return -1;
+  }
+
+  //填充vma中的状态信息
+  vma->len=length;
+  vma->prot=prot;
+  vma->flags=flags;
+  vma->f=filedup(f);//增加文件引用计数
+  vma->offset=offset;
+  vma->addr=min_mmap_addr-PGROUNDDOWN(length);
+
+  return vma->addr;
+}
+
+uint64 sys_munmap(void) {
+  uint64 addr;
+  int length;
+  int vma_index = -1;
+  struct proc *p = myproc();
+
+  // Fetch arguments from user space从用户空间获取参数
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0){
+    return -1;
+  }
+
+  // Scan the VMA list to match va扫描vma列表以匹配va
+  for (int i = 0; i < NVMA; i++){
+    struct vma* vma = &p->vma[i];
+    if(vma->used == 1 && addr >= vma->addr 
+    && addr < vma->addr + vma->len){
+      vma_index = i;
+      break;
+    }
+  }
+  if(vma_index == -1){
+    printf("sys_munmap: VMA not found.\n");
+    return -1; // VMA not found
+  }
+  struct vma *v = &p->vma[vma_index];
+
+  // Check munmap range  检查 munmap 范围是否匹配 VMA
+  if(addr != v->addr && addr + length != v->addr + v->len){
+    printf("sys_munmap: mmap range does not match VMA."
+    "va: %p, len: %d\n", addr, length);
+    return -1;
+  }
+  //调整 VMA 的地址和长度
+  if(addr == v->addr){
+    v->addr += length;
+    v->len -= length;
+  } else if(addr + length == v->addr + v->len){
+    v->len -= length;
+  }
+
+  // Write back to file if configured  
+  //如果配置了文件写回，并且 VMA 具有写权限，则将数据写回文件
+  if(v->flags == MAP_SHARED && (v->prot & PROT_WRITE)){
+    filewrite(v->f, addr, length);
+  }
+  // Remove mappings取消映射
+  uvmunmap(p->pagetable, addr, PGROUNDUP(length) / PGSIZE, 1);
+
+  // Close the file if the all mappings are removed in the VMA
+  //如果vma长度为0 关闭文件并标记vma未使用
+  if(v->len == 0){
+    fileclose(v->f);
+    v->used = 0;
+  }
+
   return 0;
 }

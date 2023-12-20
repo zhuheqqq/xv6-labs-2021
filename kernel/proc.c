@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -269,6 +270,7 @@ growproc(int n)
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
+//修改  为子进程复制一份与父进程完全一致的vma列表 另外需要将vma指向的文件引用计数加1
 int
 fork(void)
 {
@@ -300,6 +302,14 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  // copy VMA list
+  for(int i = 0; i < NVMA; i++){
+    if(p->vma[i].used){
+      memmove(&np->vma[i], &p->vma[i], sizeof(p->vma[i]));
+      filedup(p->vma[i].f);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -352,6 +362,19 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+//将进程的已映射区域取消
+  for (int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vma[i];
+    if(v->used){
+      if(v->flags == MAP_SHARED && (v->prot & PROT_WRITE)){
+        filewrite(v->f, v->addr, v->len);
+      }
+      fileclose(v->f);
+      uvmunmap(p->pagetable, v->addr, PGROUNDUP(v->len) / PGSIZE, 1);
+      v->used = 0;
+    }
+  } 
 
   begin_op();
   iput(p->cwd);
